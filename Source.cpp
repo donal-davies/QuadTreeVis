@@ -10,33 +10,36 @@
 using namespace std;
 using namespace sf;
 
-const int XMAX = 800;
-const int YMAX = 800;
+const unsigned int XMAX = 1000;
+const unsigned int YMAX = 1000;
+const unsigned int ANT_SIZE = 5;
 
 struct Body {
 	double angle;
 	double velocity;
-	RectangleShape* object;
+	int index;
+	QuadTree* container;
 
-	Body(double d, double vel, RectangleShape* rect) : angle(d), velocity(vel), object(rect) {};
+	Body(double d, double vel, int i) : angle(d), velocity(vel), index(i), container(0) {};
 	~Body() {
 		//delete object;
 	}
 };
 
 struct QuadTree {
-	int MAX_DEPTH = 6;
-	int MAX_CAPACITY = 20;
+	unsigned short MAX_DEPTH = 4;
+	unsigned short MAX_CAPACITY = 20;
 
 	QuadTree* children[4];
 	vector<Body*> data;
 	int depth;
 	RectangleShape* bounds;
 	QuadTree* parent;
+	VertexArray* verts;
 
-	QuadTree(int i, RectangleShape* b, QuadTree* p) : children(), data(vector<Body*>()), depth(i), bounds(b), parent(p) {
+	QuadTree(int i, RectangleShape* b, QuadTree* p, VertexArray* v) : children(), data(vector<Body*>()), depth(i), bounds(b), parent(p), verts(v) {
 		bounds->setFillColor(Color::Transparent);
-		bounds->setOutlineColor(Color::White);
+		bounds->setOutlineColor(Color(255, 255, 255, 100));
 		bounds->setOutlineThickness(-1);
 	}
 
@@ -45,7 +48,7 @@ struct QuadTree {
 
 	void compress() {
 		if (children[0]) {
-			for (int i = 0; i < 4; ++i)if (children[i])if(children[i]->data.size()==0)children[i] = 0;
+			for (int i = 0; i < 4; ++i)if(children[i]->data.size()==0)children[i] = 0;
 		}
 	}
 
@@ -55,6 +58,7 @@ struct QuadTree {
 			for (int i = 0; i < 4; ++i) {
 				for (auto iter = children[i]->data.begin(); iter != children[i]->data.end(); ++iter) {
 					data.push_back(*iter);
+					(*iter)->container = this;
 				}
 				children[i]->data.clear();
 			}
@@ -69,17 +73,16 @@ struct QuadTree {
 	}
 
 	void remove(Body* target) {
-		QuadTree* targetNode = locate(target);
-
-		auto iter = targetNode->data.begin();
+		auto iter = target->container->data.begin();
 		while (*iter != target)++iter;
-		targetNode->data.erase(iter);
-		targetNode->prune();
+		target->container->data.erase(iter);
+		//target->container->prune();
+		target->container = 0;
 	}
 
 	void split() {
 		for (int i = 0; i < 4; ++i) {
-			children[i] = new QuadTree(depth + 1, produceBounds(i), this);
+			children[i] = new QuadTree(depth + 1, produceBounds(i), this, verts);
 		}
 	}
 
@@ -92,23 +95,6 @@ struct QuadTree {
 		}
 	}
 
-	QuadTree* locate(Body* target) {
-		for (auto iter = data.begin(); iter != data.end(); ++iter) {
-			if (*iter == target) {
-				return this;
-			}
-		}
-
-		int quad = target->object->getPosition().x < (bounds->getPosition().x + bounds->getSize().x / 2) ? 0 : 1;
-
-		quad = target->object->getPosition().y < (bounds->getPosition().y + bounds->getSize().y / 2) ? (quad == 0 ? 0 : 1) : (quad == 0 ? 2 : 3);
-
-		if (children[quad] != 0) {
-			return children[quad]->locate(target);
-		}
-		return children[quad];
-	}
-
 	void descendChildren() {
 		for (auto iter = data.begin(); iter != data.end(); ++iter) {
 			insertObject(*iter);
@@ -117,12 +103,15 @@ struct QuadTree {
 	}
 
 	void insertObject(Body* target) {
-		int quad = target->object->getPosition().x < (bounds->getPosition().x + bounds->getSize().x / 2) ? 0 : 1;
+		int quad = (*verts)[target->index].position.x < (bounds->getPosition().x + bounds->getSize().x / 2) ? 0 : 1;
 
-		quad = target->object->getPosition().y < (bounds->getPosition().y + bounds->getSize().y / 2) ? (quad == 0 ? 0 : 1) : (quad == 0 ? 2 : 3);
+		quad = (*verts)[target->index].position.y < (bounds->getPosition().y + bounds->getSize().y / 2) ? (quad == 0 ? 0 : 1) : (quad == 0 ? 2 : 3);
 		
 		if (children[quad] == 0) {
-			if (data.size() < MAX_CAPACITY || depth == MAX_DEPTH)data.push_back(target);
+			if (data.size() < MAX_CAPACITY || depth == MAX_DEPTH) {
+				data.push_back(target);
+				target->container = this;
+			}
 			else {
 				split();
 				descendChildren();
@@ -136,20 +125,9 @@ struct QuadTree {
 
 	RectangleShape* produceBounds(int q) {
 		RectangleShape* newRect = new RectangleShape(Vector2f(bounds->getSize().x / 2.0f, bounds->getSize().y / 2.0f));
-		switch (q) {
-		case 0:
-			newRect->setPosition(bounds->getPosition().x, bounds->getPosition().y);
-			break;
-		case 1:
-			newRect->setPosition(bounds->getPosition().x + newRect->getSize().x, bounds->getPosition().y);
-			break;
-		case 2:
-			newRect->setPosition(bounds->getPosition().x, bounds->getPosition().y + newRect->getSize().y);
-			break;
-		case 3:
-			newRect->setPosition(bounds->getPosition().x + newRect->getSize().x, bounds->getPosition().y + newRect->getSize().y);
-			break;
-		}
+
+		newRect->setPosition(q % 2 == 0 ? bounds->getPosition().x : bounds->getPosition().x + newRect->getSize().x,
+			q < 2 ? bounds->getPosition().y : bounds->getPosition().y + newRect->getSize().y);
 
 		return newRect;
 	}
@@ -163,16 +141,23 @@ struct QuadTree {
 	}
 };
 
-void updatePosition(Body* object, QuadTree* root) {
+
+void move(float x, float y, int ind, VertexArray* verts) {
+	for (int i = 0; i < 4; ++i) {
+		(*verts)[ind + i].position += Vector2f(x, y);
+	}
+}
+
+void updatePosition(Body* object, QuadTree* root, VertexArray* verts) {
 	double xMotion = cos(object->angle);
 	double yMotion = sin(object->angle);
 
-	if (object->object->getPosition().x + object->velocity * xMotion < 0 || object->object->getPosition().x + object->velocity * xMotion > XMAX) {
+	if ((*verts)[object->index].position.x + object->velocity * xMotion <= 0 || (*verts)[object->index].position.x + object->velocity * xMotion >= XMAX) {
 		//Reflect about x-axis
 		object->angle = fmod(M_PI + object->angle * -1, 2 * M_PI);
 	}
 
-	if (object->object->getPosition().y + object->velocity * yMotion < 0 || object->object->getPosition().y + object->velocity * yMotion > YMAX) {
+	if ((*verts)[object->index].position.y + object->velocity * yMotion <= 0 || (*verts)[object->index].position.y + object->velocity * yMotion >= YMAX) {
 		//Reflect about y axis
 		object->angle = fmod(-1 * object->angle, 2 * M_PI);
 	}
@@ -180,57 +165,58 @@ void updatePosition(Body* object, QuadTree* root) {
 	xMotion = cos(object->angle);
 	yMotion = sin(object->angle);
 
-	float newX = object->object->getPosition().x + object->velocity * xMotion;
-	float newY = object->object->getPosition().y + object->velocity * yMotion;
+	float newX = (*verts)[object->index].position.x + object->velocity * xMotion;
+	float newY = (*verts)[object->index].position.y + object->velocity * yMotion;
 
-	QuadTree* current = root->locate(object);
-	if (current != 0) {
-		RectangleShape* bounds = current->bounds;
+	if (!object->container)root->insertObject(object);
+	else {
+		RectangleShape* bounds = object->container->bounds;
 
 		if ((newX < bounds->getPosition().x || newX > bounds->getPosition().x + bounds->getSize().x) || (newY < bounds->getPosition().y || newY > bounds->getPosition().y + bounds->getSize().y)) {
 			root->remove(object);
-			//root->prune();
 
-			object->object->setPosition(newX, newY);
+			move(object->velocity * xMotion, object->velocity * yMotion, object->index, verts);
 			root->insertObject(object);
 			return;
 		}
 	}
-	else {
-		root->insertObject(object);
-	}
 
-	object->object->setPosition(newX, newY);
+	move(object->velocity * xMotion, object->velocity * yMotion, object->index, verts);
 }
+
 
 int main() {
 
-	double WINDOW_X = 800;
-	double WINDOW_Y = 800;
-
-	RenderWindow window(VideoMode(WINDOW_X, WINDOW_Y), "Quads");
+	RenderWindow window(VideoMode(XMAX, YMAX), "Quads");
 	window.setFramerateLimit(60);
 
 	default_random_engine generator;
-	normal_distribution<double> dist(XMAX / 2.0, XMAX/10.0);
-	normal_distribution<double> dist2(YMAX / 2.0, YMAX/10.0);
-	normal_distribution<double> velDist(1.0, 0.0);
+	normal_distribution<float> dist(XMAX / 2.0, XMAX/10.0);
+	normal_distribution<float> dist2(YMAX / 2.0, YMAX/10.0);
+	normal_distribution<double> velDist(1.0, 1.0);
 	uniform_real_distribution<double> angleDist(0, 2*M_PI);
+	normal_distribution<double> angleDist2(M_PI, M_PI / 6);
 
 
 	vector<Body> objects;
-
+	VertexArray verts(Quads, 0);
 	for (int i = 0; i < 5000; ++i) {
-		RectangleShape* object = new RectangleShape(Vector2f(4, 4));
-		object->setPosition(dist(generator), dist2(generator));
-		object->setFillColor(Color::Green);
-		Body b = *(new Body(angleDist(generator), velDist(generator), object));
+		vector<Vertex*> points;
+
+		for (int x = 0; x < 4; ++x) {
+			Vertex* vert = new Vertex(Vector2f(x < 2 ? ANT_SIZE : 0, x == 1 || x == 2 ? ANT_SIZE : 0), Color::Green);
+			verts.append(*vert);
+		}
+
+		Body b = *(new Body(fmod(angleDist(generator) + angleDist2(generator), 2*M_PI), velDist(generator), 4*i));
+		
 		objects.push_back(b);
+		move(dist(generator), dist2(generator), b.index, &verts);
 	}
 
 	RectangleShape* rootRect = new RectangleShape(Vector2f(0., 0.));
 	rootRect->setSize(Vector2f(XMAX, YMAX));
-	QuadTree root = *new QuadTree(0, rootRect, NULL);
+	QuadTree root = *new QuadTree(0, rootRect, NULL, &verts);
 
 	for (auto iter = objects.begin(); iter != objects.end(); ++iter)root.insertObject(&*iter);
 
@@ -242,11 +228,12 @@ int main() {
 
 		window.clear();
 
-		for (auto iter = objects.begin(); iter != objects.end(); ++iter) {
-			updatePosition(&*iter, &root);
-			if (&*iter)window.draw(*(iter->object));
+		for (int i = 0; i < objects.size(); ++i) {
+			updatePosition(&objects[i], &root, &verts);
 		}
+
 		root.drawRect(&window);
+		window.draw(verts);
 
 		window.display();
 	}
